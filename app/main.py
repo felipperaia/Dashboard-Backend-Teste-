@@ -19,16 +19,12 @@ from .tasks.scheduler import start_scheduler
 app = FastAPI()
 logger = logging.getLogger("uvicorn.error")
 
-# ✅ CORREÇÃO CORS - PERMITIR TODAS AS ORIGENS DO FRONTEND
+# CORS: permitir somente origens específicas (Netlify + Render backend)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "https://dashboardsilo.netlify.app",
         "https://splendorous-dusk-f86c65.netlify.app",
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "http://localhost:5173", 
-        "http://127.0.0.1:5173"
+        "https://dashboardsilo.netlify.app",
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -87,4 +83,3 @@ try:
             logger.info("app.ml importado mas nao tem atributo 'router'; pulando registro do router ML.")
 except Exception as e:
     logger.warning("Nao foi possivel registrar router ML: %s", e)
-

@@ -8,7 +8,8 @@ from datetime import datetime
 import numpy as np
 from bson import ObjectId
 from ..models import Report, ReportIn, ReportMetrics
-from .. import db, auth
+from .. import auth
+from ..db import get_collection
 from ..template_utils.templates import render_tmpl
 from fastapi.responses import StreamingResponse
 from reportlab.lib.pagesizes import letter
@@ -45,13 +46,15 @@ def calc_metrics(values: List[float]) -> ReportMetrics:
 @router.post("/", response_model=Report)
 async def create_report(body: ReportIn, user=Depends(auth.get_current_user)):
     # Busca nome do silo
-    silo = await db.silos.find_one({"_id": body.silo_id})
+    silos_coll = get_collection('silos')
+    silo = await silos_coll.find_one({"_id": body.silo_id})
     if not silo:
         raise HTTPException(status_code=404, detail="Silo não encontrado")
     
     # Busca dados
     q = {"silo_id": body.silo_id, "timestamp": {"$gte": body.start, "$lte": body.end}}
-    rows = [r async for r in db.readings.find(q)]
+    readings_coll = get_collection('readings')
+    rows = [r async for r in readings_coll.find(q)]
     temps = [r.get("temperature") for r in rows if r.get("temperature") is not None]
     hums = [r.get("humidity") for r in rows if r.get("humidity") is not None]
     gases = [r.get("gas") for r in rows if r.get("gas") is not None]
@@ -75,8 +78,9 @@ async def create_report(body: ReportIn, user=Depends(auth.get_current_user)):
         "created_by": user.get("_id"),
     }
     
-    res = await db.reports.insert_one(doc)
-    created = await db.reports.find_one({"_id": res.inserted_id})
+    reports_coll = get_collection('reports')
+    res = await reports_coll.insert_one(doc)
+    created = await reports_coll.find_one({"_id": res.inserted_id})
     return created
 
 
@@ -85,13 +89,15 @@ async def list_reports(silo_id: Optional[str] = None, limit: int = 100, user=Dep
     q = {}
     if silo_id:
         q["silo_id"] = silo_id
-    cur = db.reports.find(q).sort("created_at", -1).limit(limit)
+    reports_coll = get_collection('reports')
+    cur = reports_coll.find(q).sort("created_at", -1).limit(limit)
     return [r async for r in cur]
 
 
 @router.get("/{report_id}", response_model=Report)
 async def get_report(report_id: str, user=Depends(auth.get_current_user)):
-    r = await db.reports.find_one({"_id": oid(report_id)})
+    reports_coll = get_collection('reports')
+    r = await reports_coll.find_one({"_id": oid(report_id)})
     if not r:
         raise HTTPException(status_code=404, detail="Relatório não encontrado")
     return r
@@ -99,23 +105,25 @@ async def get_report(report_id: str, user=Depends(auth.get_current_user)):
 
 @router.put("/{report_id}", response_model=Report)
 async def update_report(report_id: str, body: ReportIn, user=Depends(auth.get_current_user)):
-    old = await db.reports.find_one({"_id": oid(report_id)})
+    reports_coll = get_collection('reports')
+    old = await reports_coll.find_one({"_id": oid(report_id)})
     if not old:
         raise HTTPException(status_code=404, detail="Relatório não encontrado")
-    await db.reports.update_one({"_id": oid(report_id)}, {"$set": body.dict()})
-    r = await db.reports.find_one({"_id": oid(report_id)})
+    await reports_coll.update_one({"_id": oid(report_id)}, {"$set": body.dict()})
+    r = await reports_coll.find_one({"_id": oid(report_id)})
     return r
 
 
 @router.delete("/{report_id}")
 async def delete_report(report_id: str, user=Depends(auth.get_current_user)):
-    old = await db.reports.find_one({"_id": oid(report_id)})
+    reports_coll = get_collection('reports')
+    old = await reports_coll.find_one({"_id": oid(report_id)})
     if not old:
         raise HTTPException(status_code=404, detail="Relatório não encontrado")
     # permitir delete apenas ao criador do relatório ou a admins
     if user.get('role') != 'admin' and str(old.get('created_by')) != str(user.get('_id')):
         raise HTTPException(status_code=403, detail='Apenas o criador ou admin pode deletar este relatório')
-    await db.reports.delete_one({"_id": oid(report_id)})
+    await reports_coll.delete_one({"_id": oid(report_id)})
     return {"ok": True}
 
 

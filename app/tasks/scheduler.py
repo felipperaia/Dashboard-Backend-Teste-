@@ -26,7 +26,8 @@ def start_scheduler(app):
             silo_id = silo["_id"] if silo else None
             device_id = silo.get("device_id") if silo else None
             await fetch_and_store(channel, read_key, silo_id=silo_id, device_id=device_id)
-    scheduler.add_job(lambda: asyncio.create_task(job()), "interval", minutes=5)
+    # Agendar a coroutine diretamente no AsyncIOScheduler (executa no loop do FastAPI)
+    scheduler.add_job(job, "interval", minutes=5)
 
     # Job semanal para coletar previsões meteorológicas por silo (se tiver lat/lon)
     async def weekly_weather_job():
@@ -42,7 +43,7 @@ def start_scheduler(app):
             logger.error(f"Erro no weekly_weather_job: {e}")
 
     # adicionar job semanal (uma vez por semana)
-    scheduler.add_job(lambda: asyncio.create_task(weekly_weather_job()), "cron", day_of_week="mon", hour=3)
+    scheduler.add_job(weekly_weather_job, "cron", day_of_week="mon", hour=3)
     # Keep-alive job: faz ping no próprio serviço e opcionalmente em um endpoint LLM para evitar hibernação (útil em contas free)
     async def keep_alive_job():
         try:
@@ -70,5 +71,27 @@ def start_scheduler(app):
         interval_min = int(os.environ.get('KEEPALIVE_INTERVAL_MIN', '10'))
     except Exception:
         interval_min = 10
-    scheduler.add_job(lambda: asyncio.create_task(keep_alive_job()), 'interval', minutes=interval_min)
+    scheduler.add_job(keep_alive_job, 'interval', minutes=interval_min)
+    # Agendar re-treino ML semanal (executa o comando configurado em ML_TRAIN_COMMAND)
+    async def weekly_retrain_job():
+        try:
+            train_cmd = os.environ.get('ML_TRAIN_COMMAND') or f"{os.environ.get('PYSPARK_PYTHON','python')} sparkz/train.py"
+            # executar em subprocess em background
+            import subprocess
+            proc = subprocess.Popen(train_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=os.environ, shell=True)
+            out, err = proc.communicate()
+            if out:
+                logger.info(f"ML weekly retrain stdout: {out.decode('utf-8', errors='ignore')}")
+            if err:
+                logger.warning(f"ML weekly retrain stderr: {err.decode('utf-8', errors='ignore')}")
+        except Exception as e:
+            logger.error(f"Erro no weekly_retrain_job: {e}")
+
+    # Agenda padrão: domingo às 2h UTC (configurável via env ML_RETRAIN_CRON_DAY/ML_RETRAIN_CRON_HOUR)
+    cron_day = os.environ.get('ML_RETRAIN_CRON_DAY', 'sun')
+    try:
+        cron_hour = int(os.environ.get('ML_RETRAIN_CRON_HOUR', '2'))
+    except Exception:
+        cron_hour = 2
+    scheduler.add_job(weekly_retrain_job, 'cron', day_of_week=cron_day, hour=cron_hour)
     scheduler.start()

@@ -79,4 +79,4 @@ async def retrain_model(background_tasks: BackgroundTasks, horizons: Optional[st
             print('Error running train:', e)
 
     background_tasks.add_task(run_train)
-    return {'status': 'started', 'cmd': ' '.join(cmd)}
+    return {'status': 'started', 'cmd': train_cmd}
