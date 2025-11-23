@@ -126,27 +126,86 @@ async def chat(messages: List[ChatMessage], silo_id: Optional[str] = Query(None)
             payload['model'] = model
             try:
                 if stream:
-                    # stream response back to client
+                    # stream response back to client, with fallback to non-streaming on failure
                     resp = await client.stream("POST", "/chat/completions", headers=headers, json=payload)
                     if resp.status_code >= 300:
-                        last_err = await resp.aread()
+                        try:
+                            txt = await resp.aread()
+                            last_err = txt.decode('utf-8', errors='ignore')
+                        except Exception:
+                            last_err = f"status {resp.status_code}"
+                        # try next model
                         continue
 
                     async def event_stream():
+                        buffer = bytearray()
                         try:
                             async for chunk in resp.aiter_bytes():
                                 if not chunk:
                                     continue
+                                buffer.extend(chunk)
                                 yield chunk
+                        except Exception as stream_exc:
+                            # streaming failed; try a non-streaming completion as fallback
+                            try:
+                                fallback_payload = dict(base_payload)
+                                fallback_payload.pop('stream', None)
+                                fallback_payload['model'] = model
+                                r2 = await client.post("/chat/completions", headers=headers, json=fallback_payload)
+                                if r2.status_code == 200:
+                                    try:
+                                        data2 = r2.json()
+                                        content = data2.get('choices', [{}])[0].get('message', {}).get('content', '')
+                                        yield f"data: {content}\n\n".encode('utf-8')
+                                        return
+                                    except Exception:
+                                        pass
+                            except Exception:
+                                pass
+
+                            # try other fallback models (non-streaming)
+                            for fm in models_to_try:
+                                if fm == model:
+                                    continue
+                                try:
+                                    fallback2 = dict(base_payload)
+                                    fallback2.pop('stream', None)
+                                    fallback2['model'] = fm
+                                    r3 = await client.post("/chat/completions", headers=headers, json=fallback2)
+                                    if r3.status_code == 200:
+                                        try:
+                                            data3 = r3.json()
+                                            content = data3.get('choices', [{}])[0].get('message', {}).get('content', '')
+                                            yield f"data: {content}\n\n".encode('utf-8')
+                                            return
+                                        except Exception:
+                                            continue
+                                except Exception:
+                                    continue
+
+                            # if all fallbacks fail, raise the original streaming exception
+                            raise stream_exc
                         finally:
-                            await resp.aclose()
+                            try:
+                                await resp.aclose()
+                            except Exception:
+                                pass
 
                     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
                 else:
                     r = await client.post("/chat/completions", headers=headers, json=payload)
                     if r.status_code >= 300:
-                        last_err = await r.aread()
+                        # try to parse error JSON to provide meaningful message and decide to try fallback
+                        try:
+                            errjson = r.json()
+                            last_err = json.dumps(errjson)
+                        except Exception:
+                            try:
+                                last_err = (await r.aread()).decode('utf-8', errors='ignore')
+                            except Exception:
+                                last_err = f"status {r.status_code}"
+                        # if this model had no endpoints (404) try next fallback
                         continue
                     data = r.json()
                     content = data.get("choices", [{}])[0].get("message", {}).get("content")

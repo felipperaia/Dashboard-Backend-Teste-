@@ -14,7 +14,12 @@ from ..template_utils.templates import render_tmpl
 from fastapi.responses import StreamingResponse
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
+from reportlab.lib.utils import ImageReader
 import io
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import pandas as pd
 
 router = APIRouter()
 
@@ -81,6 +86,8 @@ async def create_report(body: ReportIn, user=Depends(auth.get_current_user)):
     reports_coll = get_collection('reports')
     res = await reports_coll.insert_one(doc)
     created = await reports_coll.find_one({"_id": res.inserted_id})
+    if created:
+        created["_id"] = str(created["_id"])
     return created
 
 
@@ -91,7 +98,12 @@ async def list_reports(silo_id: Optional[str] = None, limit: int = 100, user=Dep
         q["silo_id"] = silo_id
     reports_coll = get_collection('reports')
     cur = reports_coll.find(q).sort("created_at", -1).limit(limit)
-    return [r async for r in cur]
+    out = []
+    async for r in cur:
+        if r.get("_id"):
+            r["_id"] = str(r["_id"])
+        out.append(r)
+    return out
 
 
 @router.get("/{report_id}", response_model=Report)
@@ -100,6 +112,7 @@ async def get_report(report_id: str, user=Depends(auth.get_current_user)):
     r = await reports_coll.find_one({"_id": oid(report_id)})
     if not r:
         raise HTTPException(status_code=404, detail="Relatório não encontrado")
+    r["_id"] = str(r["_id"])
     return r
 
 
@@ -133,7 +146,7 @@ async def report_pdf(report_id: str, user=Depends(auth.get_current_user)):
     r = await reports_coll.find_one({"_id": oid(report_id)})
     if not r:
         raise HTTPException(status_code=404, detail="Relatório não encontrado")
-
+    # build a richer PDF: include title, meta, a time series chart (temp + hum), and 7-day meteorology if available
     buffer = io.BytesIO()
     p = canvas.Canvas(buffer, pagesize=letter)
     p.setFont("Helvetica-Bold", 16)
@@ -143,8 +156,41 @@ async def report_pdf(report_id: str, user=Depends(auth.get_current_user)):
     p.drawString(40, 715, f"Período: {r.get('start')} - {r.get('end')}")
     p.drawString(40, 700, f"Gerado em: {r.get('created_at')}")
 
-    # inserir métricas simples
-    y = 670
+    # Fetch readings for the period to plot
+    readings_coll = get_collection('readings')
+    try:
+        q = {"silo_id": r.get('silo_id'), "timestamp": {"$gte": r.get('start'), "$lte": r.get('end')}}
+        rows = [row async for row in readings_coll.find(q).sort('timestamp', 1)]
+    except Exception:
+        rows = []
+
+    if rows:
+        # build dataframe
+        df = pd.DataFrame(rows)
+        # normalize timestamp
+        if 'timestamp' in df.columns:
+            df['timestamp'] = pd.to_datetime(df['timestamp'])
+        # try temperature columns
+        temp_col = 'temperature' if 'temperature' in df.columns else ('temp_C' if 'temp_C' in df.columns else None)
+        hum_col = 'humidity' if 'humidity' in df.columns else ('rh_pct' if 'rh_pct' in df.columns else None)
+
+        plt.figure(figsize=(6,2.5))
+        if temp_col:
+            plt.plot(df['timestamp'], df[temp_col], label='Temperatura (°C)', color='#ef4444')
+        if hum_col:
+            plt.plot(df['timestamp'], df[hum_col], label='Umidade (%)', color='#3b82f6')
+        plt.legend(loc='upper right')
+        plt.tight_layout()
+        imgbuf = io.BytesIO()
+        plt.savefig(imgbuf, format='png', dpi=150)
+        plt.close()
+        imgbuf.seek(0)
+        img = ImageReader(imgbuf)
+        # draw image on PDF
+        p.drawImage(img, 40, 420, width=520, height=220)
+
+    # Metrics summary
+    y = 400
     metrics = r.get('metrics', {})
     for metric_name, metric_vals in metrics.items():
         if metric_name == 'period':
@@ -159,6 +205,28 @@ async def report_pdf(report_id: str, user=Depends(auth.get_current_user)):
         y -= 12
         p.drawString(60, y, f"Avg: {metric_vals.get('avg')}")
         y -= 20
+
+    # Include 7-day meteorology if available
+    met_coll = get_collection('meteorology')
+    met_doc = await met_coll.find_one({"silo_id": r.get('silo_id')}, sort=[('fetched_at', -1)])
+    if met_doc and met_doc.get('data'):
+        daily = met_doc['data'].get('daily', {})
+        times = daily.get('time', [])
+        tmax = daily.get('temperature_2m_max', [])
+        tmin = daily.get('temperature_2m_min', [])
+        precip = daily.get('precipitation_sum', [])
+
+        # draw a small table header
+        p.setFont("Helvetica-Bold", 12)
+        p.drawString(40, y, "Previsão (7 dias)")
+        y -= 16
+        p.setFont("Helvetica", 9)
+        max_cols = min(7, len(times))
+        for i in range(max_cols):
+            tx = times[i]
+            date_str = str(tx)
+            p.drawString(40, y, f"{date_str}: T_max={tmax[i] if i < len(tmax) else 'n/a'} T_min={tmin[i] if i < len(tmin) else 'n/a'} P={precip[i] if i < len(precip) else 'n/a'}")
+            y -= 12
 
     p.showPage()
     p.save()

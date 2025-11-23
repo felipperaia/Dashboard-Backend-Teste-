@@ -25,7 +25,10 @@ app.add_middleware(
     allow_origins=[
         "https://splendorous-dusk-f86c65.netlify.app",
         "https://dashboardsilo.netlify.app",
+        "https://dashboard-backend-teste.onrender.com",
     ],
+    # also allow subdomains/hosted domains via regex to avoid missing headers on redirects
+    allow_origin_regex=r"https?://(.+\.)?(netlify\.app|onrender\.com)$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
