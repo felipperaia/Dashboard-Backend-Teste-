@@ -40,3 +40,21 @@ async def latest(lat: Optional[float] = None, lon: Optional[float] = None, silo_
     cur = met_coll.find(q).sort("fetched_at", -1).limit(10)
     rows = [r async for r in cur]
     return rows
+
+
+@router.get("/for-location")
+async def for_location(lat: float, lon: float, user=Depends(auth.get_current_user)):
+    """Retorna o documento meteorológico mais recente para uma coordenada.
+    Se não existir, faz a chamada para Open-Meteo, salva e retorna o novo documento."""
+    met_coll = get_collection('meteorology')
+    q = {"lat": float(lat), "lon": float(lon)}
+    cur = met_coll.find(q).sort("fetched_at", -1).limit(1)
+    rows = [r async for r in cur]
+    if rows:
+        return rows[0]
+
+    # não encontrado: buscar agora e salvar
+    doc = await fetch_weather_for_location(float(lat), float(lon))
+    if not doc:
+        raise HTTPException(status_code=500, detail="Erro ao buscar previsão")
+    return doc
