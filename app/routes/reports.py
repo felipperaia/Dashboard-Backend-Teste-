@@ -129,7 +129,8 @@ async def delete_report(report_id: str, user=Depends(auth.get_current_user)):
 
 @router.get("/{report_id}/pdf")
 async def report_pdf(report_id: str, user=Depends(auth.get_current_user)):
-    r = await db.reports.find_one({"_id": oid(report_id)})
+    reports_coll = get_collection('reports')
+    r = await reports_coll.find_one({"_id": oid(report_id)})
     if not r:
         raise HTTPException(status_code=404, detail="Relatório não encontrado")
 

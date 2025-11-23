@@ -4,13 +4,14 @@ Serviço para buscar previsões meteorológicas (Open-Meteo gratuito) e salvar n
 import httpx
 from datetime import datetime
 from .. import db, config
+from ..db import get_collection
 import logging
 
 logger = logging.getLogger("uvicorn.error")
 
 OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
 
-async def fetch_weather_for_location(lat: float, lon: float, days: int = 7):
+async def fetch_weather_for_location(lat: float, lon: float, days: int = 7, silo_id: str = None):
     params = {
         "latitude": lat,
         "longitude": lon,
@@ -29,10 +30,12 @@ async def fetch_weather_for_location(lat: float, lon: float, days: int = 7):
             "_id": f"met_{lat}_{lon}_{int(datetime.utcnow().timestamp())}",
             "lat": lat,
             "lon": lon,
+            "silo_id": silo_id,
             "fetched_at": datetime.utcnow(),
             "data": data
         }
-        await db.db.meteorology.insert_one(doc)
+        met_coll = get_collection('meteorology')
+        await met_coll.insert_one(doc)
         return doc
     except Exception as e:
         logger.error(f"Erro ao buscar Open-Meteo: {e}")

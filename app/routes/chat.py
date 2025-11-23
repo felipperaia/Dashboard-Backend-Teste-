@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional
 from . import rag as rag_routes
 from . import reports as reports_routes
+from fastapi.responses import StreamingResponse
 
 router = APIRouter()
 
@@ -15,7 +16,7 @@ class ChatMessage(Dict[str, str]):
 
 
 @router.post("/")
-async def chat(messages: List[ChatMessage], silo_id: Optional[str] = Query(None), include_recent: int = Query(0), user=Depends(auth.get_current_user)):
+async def chat(messages: List[ChatMessage], silo_id: Optional[str] = Query(None), include_recent: int = Query(0), stream: bool = Query(False), user=Depends(auth.get_current_user)):
     """Encaminha conversa para OpenRouter. Se `silo_id` for fornecido, anexa leituras recentes como contexto.
     Variáveis de ambiente: OPENROUTER_API_KEY, OPENROUTER_MODEL, LLM_SYSTEM_PROMPT
     """
@@ -109,12 +110,50 @@ async def chat(messages: List[ChatMessage], silo_id: Optional[str] = Query(None)
     for m in messages:
         messages_out.append(m)
 
-    payload = {"model": config.OPENROUTER_MODEL, "messages": messages_out, "temperature": 0.2}
+    # Try main model and fallbacks if configured
+    models_to_try = [config.OPENROUTER_MODEL] + [m for m in getattr(config, 'FALLBACK_OPENROUTER_MODELS', []) if m != config.OPENROUTER_MODEL]
     headers = {"Authorization": f"Bearer {config.OPENROUTER_API_KEY}"}
-    async with httpx.AsyncClient(base_url="https://openrouter.ai/api/v1", timeout=60) as client:
-        r = await client.post("/chat/completions", headers=headers, json=payload)
-    if r.status_code >= 300:
-        raise HTTPException(status_code=500, detail=f"OpenRouter erro: {r.text}")
-    data = r.json()
-    content = data.get("choices", [{}])[0].get("message", {}).get("content")
-    return {"reply": content}
+
+    # Add streaming flag to payload when requested
+    base_payload = {"messages": messages_out, "temperature": 0.2}
+    if stream:
+        base_payload['stream'] = True
+
+    async with httpx.AsyncClient(base_url="https://openrouter.ai/api/v1", timeout=300) as client:
+        last_err = None
+        for model in models_to_try:
+            payload = dict(base_payload)
+            payload['model'] = model
+            try:
+                if stream:
+                    # stream response back to client
+                    resp = await client.stream("POST", "/chat/completions", headers=headers, json=payload)
+                    if resp.status_code >= 300:
+                        last_err = await resp.aread()
+                        continue
+
+                    async def event_stream():
+                        try:
+                            async for chunk in resp.aiter_bytes():
+                                if not chunk:
+                                    continue
+                                yield chunk
+                        finally:
+                            await resp.aclose()
+
+                    return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+                else:
+                    r = await client.post("/chat/completions", headers=headers, json=payload)
+                    if r.status_code >= 300:
+                        last_err = await r.aread()
+                        continue
+                    data = r.json()
+                    content = data.get("choices", [{}])[0].get("message", {}).get("content")
+                    return {"reply": content, "model_used": model}
+            except Exception as e:
+                last_err = e
+                continue
+
+    # If we reach here, all models failed
+    raise HTTPException(status_code=500, detail=f"OpenRouter erro: {last_err}")

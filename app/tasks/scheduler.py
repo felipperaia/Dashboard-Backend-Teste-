@@ -38,7 +38,7 @@ def start_scheduler(app):
                 lon = s.get("location", {}).get("lon")
                 if lat is not None and lon is not None:
                     logger.info(f"Coletando previsão meteorológica para silo {s.get('name')} ({lat},{lon})")
-                    await fetch_weather_for_location(float(lat), float(lon))
+                    await fetch_weather_for_location(float(lat), float(lon), silo_id=str(s.get('_id')))
         except Exception as e:
             logger.error(f"Erro no weekly_weather_job: {e}")
 

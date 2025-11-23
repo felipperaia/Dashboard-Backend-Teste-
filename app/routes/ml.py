@@ -5,6 +5,7 @@ Endpoints para previsão (forecast) e re-treino via Sparkz.
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from typing import Optional
 from .. import db, auth
+from ..db import get_collection
 from ..services import ml_service
 import subprocess
 import os
@@ -29,7 +30,8 @@ async def get_forecast(siloId: Optional[str] = None, target: Optional[str] = Non
     now = datetime.utcnow()
     end = now + timedelta(days=period_days)
     q['timestamp_forecast'] = {'$gte': now, '$lte': end}
-    cursor = db.db.forecast_demeter.find(q).sort('timestamp_forecast', 1)
+    fc = get_collection('forecast_demeter')
+    cursor = fc.find(q).sort('timestamp_forecast', 1)
     res = []
     async for doc in cursor:
         doc['_id'] = str(doc.get('_id'))
@@ -41,15 +43,18 @@ async def get_forecast(siloId: Optional[str] = None, target: Optional[str] = Non
 async def get_forecast_text(siloId: str, period_days: int = 7, user=Depends(auth.get_current_user)):
     """Gera um resumo textual explicativo a partir das previsões e histórico recente."""
     # Busca previsões e leituras recentes e delega para ml_service
-    forecasts_cursor = db.db.forecast_demeter.find({'siloId': siloId}).sort('timestamp_forecast', 1)
+    fc = get_collection('forecast_demeter')
+    forecasts_cursor = fc.find({'siloId': siloId}).sort('timestamp_forecast', 1)
     forecasts = []
     async for f in forecasts_cursor:
         forecasts.append(f)
-    recent_cursor = db.db.readings.find({'silo_id': siloId}).sort('timestamp', -1).limit(200)
+    readings_coll = get_collection('readings')
+    recent_cursor = readings_coll.find({'silo_id': siloId}).sort('timestamp', -1).limit(200)
     recent = []
     async for r in recent_cursor:
         recent.append(r)
-    weather_cursor = db.db.meteorology.find({'location.siloId': siloId}).sort('timestamp', -1).limit(20)
+    meteorology_coll = get_collection('meteorology')
+    weather_cursor = meteorology_coll.find({'silo_id': siloId}).sort('fetched_at', -1).limit(20)
     weather = []
     async for w in weather_cursor:
         weather.append(w)

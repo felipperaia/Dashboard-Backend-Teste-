@@ -41,6 +41,9 @@ LLM_SYSTEM_PROMPT = os.getenv("LLM_SYSTEM_PROMPT", "Você é um assistente espec
 # Habilitar RAG (retrieval-augmented generation) por padrão — permite anexar contexto do DB e relatórios
 USE_RAG = os.getenv('USE_RAG', 'true').lower() in ('1', 'true', 'yes')
 
+# Lista de modelos fallback (comma-separated) para tentar caso o modelo principal falhe
+FALLBACK_OPENROUTER_MODELS = [m.strip() for m in os.getenv('FALLBACK_OPENROUTER_MODELS', 'deepseek/deepseek-chat-v3.1:free,deepseek/deepseek-r1-distill-qwen-32b:free').split(',') if m.strip()]
+
 # Luminosity thresholds (lux)
 # Defaults: ambiente escuro/fechado até ~10 lux, aberto/iluminado acima ~100 lux
 # Podem ser sobrescritos via variáveis de ambiente
