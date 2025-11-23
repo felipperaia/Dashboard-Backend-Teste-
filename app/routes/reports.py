@@ -70,6 +70,31 @@ async def create_report(body: ReportIn, user=Depends(auth.get_current_user)):
         "gas": calc_metrics(gases).dict(),
         "period": {"start": body.start, "end": body.end},
     }
+    # coletar métricas de previsões geradas pelo spark (forecast_demeter)
+    try:
+        forecast_coll = get_collection('forecast_demeter')
+        fq = {"silo_id": body.silo_id, "timestamp_forecast": {"$gte": body.start, "$lte": body.end}}
+        frows = [f async for f in forecast_coll.find(fq)]
+    except Exception:
+        frows = []
+
+    # agrupar por target e calcular estatísticas simples
+    spark_metrics = {}
+    if frows:
+        by_target = {}
+        for fr in frows:
+            tgt = fr.get('target') or 'unknown'
+            by_target.setdefault(tgt, []).append(fr)
+        for tgt, items in by_target.items():
+            vals = [it.get('value_predicted') for it in items if it.get('value_predicted') is not None]
+            spark_metrics[tgt] = {
+                'count': len(items),
+                'min': min(vals) if vals else None,
+                'max': max(vals) if vals else None,
+                'avg': (sum(vals)/len(vals)) if vals else None,
+            }
+
+    # adicionar spark_metrics ao documento
     
     doc = {
         "silo_id": body.silo_id,
@@ -79,6 +104,7 @@ async def create_report(body: ReportIn, user=Depends(auth.get_current_user)):
         "title": body.title or f"Relatório {datetime.utcnow().date()}",
         "notes": body.notes or "",
         "metrics": metrics,
+        "spark_metrics": spark_metrics,
         "created_at": datetime.utcnow(),
         "created_by": user.get("_id"),
     }
@@ -205,6 +231,18 @@ async def report_pdf(report_id: str, user=Depends(auth.get_current_user)):
         y -= 12
         p.drawString(60, y, f"Avg: {metric_vals.get('avg')}")
         y -= 20
+
+    # Spark (forecast) metrics
+    spark_metrics = r.get('spark_metrics') or {}
+    if spark_metrics:
+        p.setFont("Helvetica-Bold", 12)
+        p.drawString(40, y, "Métricas de Previsão (Spark)")
+        y -= 16
+        p.setFont("Helvetica", 10)
+        for tgt, vals in spark_metrics.items():
+            p.drawString(40, y, f"{tgt}: count={vals.get('count')}, min={vals.get('min')}, max={vals.get('max')}, avg={vals.get('avg')}")
+            y -= 12
+        y -= 8
 
     # Include 7-day meteorology if available
     met_coll = get_collection('meteorology')

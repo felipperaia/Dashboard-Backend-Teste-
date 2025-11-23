@@ -32,7 +32,8 @@ TWILIO_FROM = os.getenv("TWILIO_FROM")
 
 # OpenRouter (LLM)
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
-OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "deepseek/deepseek-chat-v3.1:free")
+# Preferir modelo estável 'openai/gpt-oss-20b:free' por padrão (deepseek indisponível)
+OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "openai/gpt-oss-20b:free")
 LLM_SYSTEM_PROMPT = os.getenv("LLM_SYSTEM_PROMPT", "Você é um assistente especializado no sistema de monitoramento de silos de soja."
     "Responda apenas sobre o sistema atual, seus dados, funcionalidades e uso, usando a documentação disponível."
     "Explique o que o usuário pode fazer no dashboard e como interpretar leituras de umidade, temperatura e gases."
@@ -42,7 +43,7 @@ LLM_SYSTEM_PROMPT = os.getenv("LLM_SYSTEM_PROMPT", "Você é um assistente espec
 USE_RAG = os.getenv('USE_RAG', 'true').lower() in ('1', 'true', 'yes')
 
 # Lista de modelos fallback (comma-separated) para tentar caso o modelo principal falhe
-FALLBACK_OPENROUTER_MODELS = [m.strip() for m in os.getenv('FALLBACK_OPENROUTER_MODELS', 'deepseek/deepseek-chat-v3.1:free,deepseek/deepseek-r1-distill-qwen-32b:free').split(',') if m.strip()]
+FALLBACK_OPENROUTER_MODELS = [m.strip() for m in os.getenv('FALLBACK_OPENROUTER_MODELS', 'openai/gpt-oss-20b:free,deepseek/deepseek-chat-v3.1:free').split(',') if m.strip()]
 
 # Luminosity thresholds (lux)
 # Defaults: ambiente escuro/fechado até ~10 lux, aberto/iluminado acima ~100 lux
