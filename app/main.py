@@ -24,7 +24,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "https://dashboardsilo.netlify.app",
-        "https://splendorous-dusk-f86c65.netlify.app/",
+        "https://splendorous-dusk-f86c65.netlify.app",
         "http://localhost:3000",
         "http://127.0.0.1:3000",
         "http://localhost:5173", 
@@ -87,3 +87,4 @@ try:
             logger.info("app.ml importado mas nao tem atributo 'router'; pulando registro do router ML.")
 except Exception as e:
     logger.warning("Nao foi possivel registrar router ML: %s", e)
+
