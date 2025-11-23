@@ -9,7 +9,7 @@ import numpy as np
 from bson import ObjectId
 from ..models import Report, ReportIn, ReportMetrics
 from .. import db, auth
-from ..utils.templates import render_tmpl
+from ..template_utils.templates import render_tmpl
 from fastapi.responses import StreamingResponse
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
@@ -154,4 +154,5 @@ async def report_pdf(report_id: str, user=Depends(auth.get_current_user)):
     p.showPage()
     p.save()
     buffer.seek(0)
+
     return StreamingResponse(buffer, media_type="application/pdf", headers={"Content-Disposition": f"attachment; filename=report_{report_id}.pdf"})
