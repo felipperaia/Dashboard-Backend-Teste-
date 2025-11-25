@@ -9,16 +9,27 @@ Inicia APScheduler para:
 """
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from .. import config
-from .. import db
-from ..services.weather import fetchweatherforlocation
-from ..services.thing_speak import fetch_and_store  # <- CORRETO
+from .. import config, db
+from ..services.thing_speak import fetch_and_store  # nome e arquivo corretos
 import logging
 import os
 import httpx
 import subprocess
 
 logger = logging.getLogger("uvicorn.error")
+
+# Import resiliente da função de weather: aceita duas variações de nome
+try:
+    from ..services.weather import fetchweatherforlocation as _fetch_weather
+except ImportError:
+    try:
+        from ..services.weather import fetch_weather_for_location as _fetch_weather
+    except ImportError:
+        _fetch_weather = None
+        logger.warning(
+            "Nenhuma função de fetch de meteorologia encontrada em app.services.weather; "
+            "jobs de meteorologia serão desativados."
+        )
 
 
 def start_scheduler(app):
@@ -29,7 +40,6 @@ def start_scheduler(app):
     async def thingspeak_job():
         """Busca dados do ThingSpeak e salva em MongoDB."""
         try:
-            # Usa os mapeamentos THINGSPEAK_CHANNELS e THINGSPEAK_API_KEYS do config
             if not getattr(config, "THINGSPEAK_CHANNELS", None) or not getattr(
                 config, "THINGSPEAK_API_KEYS", None
             ):
@@ -42,7 +52,6 @@ def start_scheduler(app):
                     logger.warning(f"Nenhuma API key para o canal lógico {system_channel_id}")
                     continue
 
-                # Opcional: buscar device_id no MongoDB, se houver
                 silo = await db.db.silos.find_one({"_id": system_channel_id}) or await db.db.silos.find_one(
                     {"name": system_channel_id}
                 )
@@ -62,9 +71,13 @@ def start_scheduler(app):
 
     scheduler.add_job(thingspeak_job, "interval", minutes=5)
 
-    # ==================== JOB 2: Meteorologia semanal (segunda-feira 3h UTC) ====================
+    # ==================== JOB 2: Meteorologia semanal (segunda 3h UTC) ====================
     async def weekly_weather_job():
         """Busca previsão meteorológica para cada silo com lat/lon."""
+        if _fetch_weather is None:
+            # função de weather não disponível neste deploy
+            return
+
         try:
             cursor = db.db.silos.find({"location.lat": {"$exists": True}})
             async for silo in cursor:
@@ -72,8 +85,10 @@ def start_scheduler(app):
                 lon = silo.get("location", {}).get("lon")
 
                 if lat is not None and lon is not None:
-                    logger.info(f"Coletando previsão meteorológica para silo {silo.get('name')} {lat},{lon}")
-                    doc = await fetchweatherforlocation(
+                    logger.info(
+                        f"Coletando previsão meteorológica para silo {silo.get('name')} ({lat}, {lon})"
+                    )
+                    doc = await _fetch_weather(
                         lat=float(lat),
                         lon=float(lon),
                         days=7,
@@ -82,12 +97,15 @@ def start_scheduler(app):
                     if doc:
                         logger.info(f"Weather data saved for silo {silo.get('name')}")
                     else:
-                        logger.warning(f"Failed to fetch weather for silo {silo.get('name')}")
+                        logger.warning(
+                            f"Failed to fetch weather for silo {silo.get('name')}"
+                        )
         except Exception as e:
             logger.error(f"Error in weekly_weather_job: {e}")
 
-    # Executar segunda-feira (1 = Monday) às 3h UTC
-    scheduler.add_job(weekly_weather_job, "cron", day_of_week=1, hour=3)
+    # Só agenda se a função de weather existe
+    if _fetch_weather is not None:
+        scheduler.add_job(weekly_weather_job, "cron", day_of_week=1, hour=3)
 
     # ==================== JOB 3: ML Training semanal (domingo 2h UTC) ====================
     async def weekly_retrain_job():
@@ -123,7 +141,7 @@ def start_scheduler(app):
         cron_hour = 2
     scheduler.add_job(weekly_retrain_job, "cron", day_of_week=cron_day, hour=cron_hour)
 
-    # ==================== JOB 4: ML Prediction diária (segunda-feira 4h UTC) ====================
+    # ==================== JOB 4: ML Prediction diária (segunda 4h UTC) ====================
     async def daily_predict_job():
         """Executa previsões ML via sparkz/predict.py em background."""
         try:
@@ -150,7 +168,6 @@ def start_scheduler(app):
         except Exception as e:
             logger.error(f"Error in daily_predict_job: {e}")
 
-    # Pode trocar para diário se quiser: scheduler.add_job(daily_predict_job, "cron", hour=4)
     scheduler.add_job(daily_predict_job, "cron", day_of_week=1, hour=4)
 
     # ==================== JOB 5: Keep-Alive para Render free tier ====================
@@ -188,7 +205,6 @@ def start_scheduler(app):
         interval_min = 10
     scheduler.add_job(keepalive_job, "interval", minutes=interval_min)
 
-    # ==================== Iniciar scheduler ====================
     scheduler.start()
     logger.info("APScheduler started with all jobs configured")
 
