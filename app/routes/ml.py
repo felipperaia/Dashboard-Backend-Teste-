@@ -139,12 +139,27 @@ async def analysis(siloId: str, period_days: int = 30, user=Depends(auth.get_cur
         f['_id'] = str(f.get('_id'))
         forecasts.append(f)
 
-    # gerar explicação textual
+    # se não houver previsões geradas (coleção vazia), gera fallback a partir das leituras
+    if not forecasts:
+        try:
+            # gera previsões heurísticas (24/48/72/168h) usando leituras recentes
+            heuristics = ml_service.generate_forecasts_from_readings(recent, horizon_hours_list=[24, 48, 72, 168])
+            # manter o mesmo formato esperado pelo frontend
+            forecasts = heuristics
+        except Exception as e:
+            forecasts = []
+
+    # buscar meteorologia recente
     weather = []
     w_cursor = meteorology_coll.find({'silo_id': siloId}).sort('fetched_at', -1).limit(20)
     async for w in w_cursor:
         weather.append(w)
 
-    explanation = ml_service.generate_explanation_text(forecasts, recent, weather)
+    # gerar explicação textual específica para armazenagem de soja
+    try:
+        explanation = ml_service.generate_soybean_storage_explanation(metrics, forecasts, weather, period_days=period_days)
+    except Exception:
+        # fallback para a explicação genérica
+        explanation = ml_service.generate_explanation_text(forecasts, recent, weather)
 
     return {'metrics': metrics, 'forecasts': forecasts, 'explanation': explanation}
