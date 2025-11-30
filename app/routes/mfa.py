@@ -21,7 +21,10 @@ async def mfa_setup(user=Depends(auth.get_current_user)):
 
 
 @router.post("/verify")
-async def mfa_verify(token: str = Body(...), user=Depends(auth.get_current_user)):
+async def mfa_verify(
+    token: str = Body(..., embed=True),
+    user=Depends(auth.get_current_user),
+):
     uid = user.get("_id")
     if not uid:
         raise HTTPException(status_code=401, detail="Usuário não autenticado")
@@ -32,5 +35,8 @@ async def mfa_verify(token: str = Body(...), user=Depends(auth.get_current_user)
     ok = totp.verify(token, valid_window=1)
     if not ok:
         raise HTTPException(status_code=401, detail="Token inválido")
-    await db.db.users.update_one({"_id": uid}, {"$set": {"mfa_enabled": True}})
+    await db.db.users.update_one(
+        {"_id": uid},
+        {"$set": {"mfa_enabled": True}}
+    )
     return {"ok": True}
